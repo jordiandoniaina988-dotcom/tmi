@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tmi-pwa-v5';
+const CACHE_NAME = 'tmi-pwa-v6';
 const APP_SHELL = [
   './',
   './index.html',
@@ -7,12 +7,31 @@ const APP_SHELL = [
   './icon-512.png'
 ];
 
+// Bibliothèques externes (versions fixes) : mises en cache dès l'installation
+// pour que l'application démarre complètement hors ligne.
+const CDN_ASSETS = [
+  'https://cdn.jsdelivr.net/npm/lucide@0.378.0/dist/umd/lucide.min.js',
+  'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js',
+  'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js',
+  'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap'
+];
+const CDN_HOSTS = ['cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com'];
+
+// Requête CORS (réponse lisible et vérifiable, jamais "opaque")
+const corsFetch = url => fetch(new Request(url, { mode: 'cors', credentials: 'omit' }));
+
 self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(APP_SHELL))
-      .then(() => self.skipWaiting())
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    await cache.addAll(APP_SHELL);
+    await Promise.all(CDN_ASSETS.map(async url => {
+      try {
+        const res = await corsFetch(url);
+        if (res && res.ok) await cache.put(url, res);
+      } catch (e) { /* sera mis en cache à la première utilisation */ }
+    }));
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', event => {
@@ -23,45 +42,56 @@ self.addEventListener('activate', event => {
   );
 });
 
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
 self.addEventListener('fetch', event => {
   const request = event.request;
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
 
-  // Never cache Supabase API/auth requests: they must use the live network.
+  // Supabase (API / auth) : toujours le réseau, jamais de cache.
   if (url.hostname.includes('supabase')) return;
 
-  // App navigation: try the network, then use the saved app shell.
+  // Navigation : réseau (max 3,5 s), sinon la copie enregistrée de l'application.
   if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request)
-        .then(response => {
-          if (response && response.ok) {
-            const copy = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put('./index.html', copy));
-          }
-          return response;
-        })
-        .catch(() => caches.match('./index.html').then(cached => cached || Response.error()))
-    );
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE_NAME);
+      try {
+        const response = await Promise.race([
+          fetch(request),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3500))
+        ]);
+        if (response && response.ok) cache.put('./index.html', response.clone());
+        return response;
+      } catch (e) {
+        return (await cache.match('./index.html')) ||
+               (await cache.match('./')) ||
+               Response.error();
+      }
+    })());
     return;
   }
 
-  // Cache same-origin app assets and public CDN libraries when available.
-  if (url.origin === self.location.origin ||
-      ['cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com'].includes(url.hostname)) {
-    event.respondWith(
-      caches.match(request).then(cached => {
-        const network = fetch(request).then(response => {
-          if (response && response.ok) {
-            const copy = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
-          }
-          return response;
-        });
-        return cached || network.catch(() => Response.error());
+  const isCdn = CDN_HOSTS.includes(url.hostname);
+  if (url.origin !== self.location.origin && !isCdn) return;
+
+  // Ressources de l'application et bibliothèques : cache d'abord, mise à jour en arrière-plan.
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    const cached = await cache.match(request, { ignoreVary: true });
+    const update = (isCdn ? corsFetch(request.url) : fetch(request))
+      .then(response => {
+        if (response && response.ok) cache.put(request, response.clone());
+        return response;
       })
-    );
-  }
+      .catch(() => null);
+    if (cached) {
+      event.waitUntil(update);
+      return cached;
+    }
+    return (await update) || Response.error();
+  })());
 });
