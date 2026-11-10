@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tmi-pwa-v6';
+const CACHE_NAME = 'tmi-pwa-v7';
 const APP_SHELL = [
   './',
   './index.html',
@@ -94,4 +94,30 @@ self.addEventListener('fetch', event => {
     }
     return (await update) || Response.error();
   })());
+});
+
+// ===== Notifications push =====
+self.addEventListener('push', event => {
+  let d = {};
+  try { d = event.data ? event.data.json() : {}; } catch (e) { d = { body: event.data ? event.data.text() : '' }; }
+  event.waitUntil(self.registration.showNotification(d.title || 'TMI', {
+    body: d.body || '',
+    icon: './icon-192.png',
+    badge: './icon-192.png',
+    tag: d.tag || 'tmi-post',
+    renotify: true,
+    data: { url: d.url || './' }
+  }));
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      for (const c of list) {
+        if ('focus' in c) { c.postMessage({ type: 'OPEN_HOME' }); return c.focus(); }
+      }
+      return self.clients.openWindow((event.notification.data && event.notification.data.url) || './');
+    })
+  );
 });
