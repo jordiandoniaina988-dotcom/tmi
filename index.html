@@ -142,11 +142,14 @@ async function sync(manual){
     const r=q.op=='upsert'?await sb.from(q.table).upsert(q.row):await sb.from(q.table).delete().eq('id',q.id);
     if(r.error)throw r.error;await tx('queue','readwrite',o=>o.delete(q.qid));}
    await load();}}
-  if(!S.queue.length)for(const t of ['boxes','transactions','members']){
-   const {data,error}=await sb.from(t).select('*');if(error)throw error;
-   const ids=new Set(data.map(r=>r.id));
-   for(const r of S[t])if(!ids.has(r.id))await tx(t,'readwrite',o=>o.delete(r.id));
-   for(const r of data)await tx(t,'readwrite',o=>o.put(r));}
+  if(!S.queue.length){
+   const T=['boxes','transactions','members'],res=await Promise.all(T.map(t=>sb.from(t).select('*')));
+   for(const r of res)if(r.error)throw r.error;
+   await Promise.all(T.map((t,i)=>new Promise(ok=>{
+    const data=res[i].data,ids=new Set(data.map(r=>r.id)),tr=DB.transaction(t,'readwrite'),os=tr.objectStore(t);
+    for(const r of S[t])if(!ids.has(r.id))os.delete(r.id);
+    for(const r of data)os.put(r);
+    tr.oncomplete=tr.onerror=tr.onabort=ok})));}
   await load();if(manual)toast('Synchronisation réussie ✔')}
  catch(e){const m=String(e&&e.message||e),p=(e&&e.code=='42501')||/permission denied|row-level security/i.test(m);console.error('Sync error:',e);toast(p?'Lecture refusée par la base : exécutez schema.sql (section GRANT) dans Supabase':/column|schema cache/i.test(m)?'Base à mettre à jour : exécutez le nouveau schema.sql dans Supabase':'Erreur de synchronisation : '+m)}
  busy=false;render()}
@@ -182,12 +185,12 @@ async function login0(){const u=$('#u').value.trim().toLowerCase(),p=$('#p').val
  if(!sb)return toast('Supabase non configuré : voir README');
  if(!navigator.onLine)return toast('Première connexion : Internet requis');
  const email=u.includes('@')?u:u+'@tanora.app';
- const {error}=await sb.auth.signInWithPassword({email,password:p});
+ const {error}=await Promise.race([sb.auth.signInWithPassword({email,password:p}),new Promise(r=>setTimeout(()=>r({error:{message:'timeout'}}),20000))]);
  if(error){console.error('Login error:',error);const m=(error.message||'').toLowerCase();
-  return toast(m.includes('not confirmed')?'Email non confirmé : confirmez-le dans Supabase (Authentication > Users)':m.includes('invalid login')?'Identifiants incorrects':'Erreur de connexion : '+error.message)}
+  return toast(m==='timeout'?'Réseau trop lent : réessayez':m.includes('not confirmed')?'Email non confirmé : confirmez-le dans Supabase (Authentication > Users)':m.includes('invalid login')?'Identifiants incorrects':'Erreur de connexion : '+error.message)}
  const {data:adm,error:e2}=await sb.from('admins').select('id').limit(1);
  if(e2||!adm||!adm.length){await sb.auth.signOut();return toast("Compte non administrateur : exécutez l'INSERT dans la table admins (voir schema.sql)")}
- localStorage.setItem('adm',JSON.stringify({u,exp:Date.now()+12*36e5}));role='admin';await sync();render()}
+ localStorage.setItem('adm',JSON.stringify({u,exp:Date.now()+12*36e5}));role='admin';render();sync()}
 function admOK(){try{const a=JSON.parse(localStorage.getItem('adm'));return a&&a.exp>Date.now()}catch{return 0}}
 const enterMember=()=>withLoader('Chargement…',async()=>{role='member';render();await sync(1)});
  function togglePw(){const p=$('#p'),b=$('.pe'),t=p.type=='password';p.type=t?'text':'password';b.setAttribute('aria-label',t?'Masquer le mot de passe':'Afficher le mot de passe');b.innerHTML='<i data-lucide="'+(t?'eye-off':'eye')+'"></i>';ico();p.focus()}
