@@ -145,7 +145,7 @@ async function sync(manual){
     renewAdm();warnedSess=false;
     for(const q of [...S.queue].sort((a,b)=>a.qid-b.qid)){
      const r=q.op=='upsert'?await sb.from(q.table).upsert(q.row):await sb.from(q.table).delete().eq('id',q.id);
-     if(r.error){if(q.table=='posts'&&missingTbl(r.error)){blocked=true;continue}throw r.error}
+     if(r.error){if(q.table=='posts'&&missingTbl(r.error)){blocked=true;continue}r.error.tbl=q.table;r.error.op='écriture';throw r.error}
      await tx('queue','readwrite',o=>o.delete(q.qid));}
     await load();
     if(blocked&&!warnedPosts){warnedPosts=true;toast('Table « posts » absente : exécutez posts.sql dans Supabase')}
@@ -154,9 +154,9 @@ async function sync(manual){
   const live=a=>a.filter(q=>!(blocked&&q.table=='posts'));
   if(!live(S.queue).length){
    const T=['boxes','transactions','members'],res=await Promise.all(T.map(t=>sb.from(t).select('*')));
-   for(const r of res)if(r.error)throw r.error;
+   for(const [i,r] of res.entries())if(r.error){r.error.tbl=T[i];r.error.op='lecture';throw r.error}
    const pr=await sb.from('posts').select('*');
-   if(pr.error&&!missingTbl(pr.error))throw pr.error;
+   if(pr.error&&!missingTbl(pr.error)){pr.error.tbl='posts';pr.error.op='lecture';throw pr.error}
    const sets=T.map((t,i)=>[t,res[i].data]);if(!pr.error)sets.push(['posts',pr.data]);
    if(!live(await tx('queue','readonly',o=>o.getAll())).length){
     await Promise.all(sets.map(([t,data])=>new Promise(ok=>{
@@ -167,7 +167,7 @@ async function sync(manual){
   await load();if(manual)toast('Synchronisation réussie ✔')}
  catch(e){const m=String(e&&e.message||e),p=(e&&e.code=='42501')||/permission denied|row-level security/i.test(m),net=/failed to fetch|network|load failed|timeout|fetch/i.test(m);console.error('Sync error:',e);
   if(net){if(manual)toast('Connexion instable : les données restent enregistrées sur l\'appareil')}
-  else toast(p?'Lecture refusée par la base : exécutez schema.sql (section GRANT) dans Supabase':/column|schema cache/i.test(m)?'Base à mettre à jour : exécutez le nouveau schema.sql dans Supabase':'Erreur de synchronisation : '+m)}
+  else toast(p?'Accès refusé par la base ('+(e.op||'lecture')+', table « '+(e.tbl||'?')+' ») : exécutez fix-permissions.sql dans Supabase':/column|schema cache/i.test(m)?'Base à mettre à jour : exécutez le nouveau schema.sql dans Supabase':'Erreur de synchronisation : '+m)}
  busy=false;await load().catch(()=>{});render();
  if(pend){pend=false;setTimeout(()=>sync(),300)}}
 function upd(){const e=$('#st');if(!e)return;const off=!navigator.onLine,w=S.queue.length;
