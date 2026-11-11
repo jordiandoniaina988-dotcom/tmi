@@ -1,11 +1,10 @@
-const CACHE_NAME = 'tmi-pwa-v9';
+const CACHE_NAME = 'tmi-pwa-v8';
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.json',
   './icon-192.png',
-  './icon-512.png',
-  './notif-badge.png'
+  './icon-512.png'
 ];
 
 // Bibliothèques externes (versions fixes) : mises en cache dès l'installation
@@ -103,8 +102,8 @@ self.addEventListener('push', event => {
   try { d = event.data ? event.data.json() : {}; } catch (e) { d = { body: event.data ? event.data.text() : '' }; }
   event.waitUntil(self.registration.showNotification(d.title || 'TMI', {
     body: d.body || '',
-    icon: d.icon || './icon-192.png',
-    badge: './notif-badge.png',
+    icon: './icon-192.png',
+    badge: './icon-192.png',
     tag: d.tag || 'tmi-post',
     renotify: true,
     data: { url: d.url || './' }
